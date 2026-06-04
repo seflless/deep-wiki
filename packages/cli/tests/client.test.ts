@@ -112,7 +112,7 @@ describe("client", () => {
     globalThis.fetch = originalFetch;
   });
 
-  test("parses SSE response correctly", async () => {
+  test("parses Streamable HTTP response with SSE framing", async () => {
     globalThis.fetch = mock(async () => {
       return sseResponse(mcpResponse("sse content"));
     }) as any;
@@ -120,6 +120,45 @@ describe("client", () => {
     const client = await loadClient();
     const result = await client.readWikiStructure("owner/repo");
     expect(result).toBe("sse content");
+
+    globalThis.fetch = originalFetch;
+  });
+
+  test("ignores Streamable HTTP SSE notifications and returns before stream closes", async () => {
+    let completed = false;
+    let closeTimer: ReturnType<typeof setTimeout>;
+    const encoder = new TextEncoder();
+    const notification = JSON.stringify({
+      jsonrpc: "2.0",
+      method: "notifications/message",
+      params: { level: "info", data: { msg: "Processing query..." } },
+    });
+    const response = JSON.stringify(mcpResponse("final answer"));
+
+    globalThis.fetch = mock(async () => {
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode(`data: ${notification}\n\ndata: ${response.slice(0, 20)}`));
+          controller.enqueue(encoder.encode(`${response.slice(20)}\n\n`));
+          closeTimer = setTimeout(() => {
+            completed = true;
+            controller.close();
+          }, 100);
+        },
+        cancel() {
+          clearTimeout(closeTimer);
+        },
+      });
+      return new Response(stream, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+    }) as any;
+
+    const client = await loadClient();
+    const result = await client.askQuestion(["owner/repo"], "Question?");
+    expect(result).toBe("final answer");
+    expect(completed).toBe(false);
 
     globalThis.fetch = originalFetch;
   });
@@ -202,7 +241,7 @@ describe("client", () => {
     globalThis.fetch = originalFetch;
   });
 
-  test("throws ServerError on SSE response with no data lines", async () => {
+  test("throws ServerError on Streamable HTTP SSE response with no data lines", async () => {
     globalThis.fetch = mock(async () => {
       return new Response("event: message\n\n", {
         status: 200,
@@ -273,7 +312,7 @@ describe("client", () => {
     globalThis.fetch = originalFetch;
   });
 
-  test("throws ServerError on malformed SSE JSON", async () => {
+  test("throws ServerError on malformed Streamable HTTP SSE JSON", async () => {
     globalThis.fetch = mock(async () => {
       return new Response("data: {not valid json}\n\n", {
         status: 200,

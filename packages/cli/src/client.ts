@@ -35,17 +35,44 @@ function makeRequest(
   };
 }
 
-function parseSSE(raw: string): JsonRpcResponse {
+function parseSSE(raw: string, expectedId: number): JsonRpcResponse {
+  const dataLines: string[] = [];
   for (const line of raw.split("\n")) {
     if (line.startsWith("data: ")) {
-      try {
-        return JSON.parse(line.slice(6));
-      } catch {
-        throw new ServerError("Malformed JSON in SSE response");
-      }
+      dataLines.push(line.slice(6));
     }
   }
-  throw new ServerError("No data in SSE response");
+
+  if (dataLines.length === 0) {
+    throw new ServerError("No data in SSE response");
+  }
+
+  // Prefer the event whose "id" matches our request — skips notifications
+  for (const text of dataLines) {
+    try {
+      const json = JSON.parse(text);
+      if (json.id === expectedId) return json;
+    } catch {
+      // skip malformed line, try next
+    }
+  }
+
+  // Fallback: return the first parseable event that has a result or error
+  for (const text of dataLines) {
+    try {
+      const json = JSON.parse(text);
+      if (json.result !== undefined || json.error !== undefined) return json;
+    } catch {
+      // skip
+    }
+  }
+
+  // Last resort: return first data line
+  try {
+    return JSON.parse(dataLines[0]);
+  } catch {
+    throw new ServerError("Malformed JSON in SSE response");
+  }
 }
 
 async function callMcp(
@@ -88,7 +115,7 @@ async function callMcp(
 
   let rpc: JsonRpcResponse;
   if (contentType.includes("text/event-stream")) {
-    rpc = parseSSE(raw);
+    rpc = parseSSE(raw, body.id);
   } else {
     try {
       rpc = JSON.parse(raw);

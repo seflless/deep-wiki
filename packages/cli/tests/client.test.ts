@@ -317,6 +317,34 @@ describe("client", () => {
     globalThis.fetch = originalFetch;
   });
 
+  test("skips SSE notifications and returns the matching result", async () => {
+    const notification = {
+      jsonrpc: "2.0",
+      method: "notifications/message",
+      params: { level: "info", data: { msg: "Processing..." } },
+    };
+    const result = {
+      jsonrpc: "2.0",
+      id: 1,
+      result: { content: [{ type: "text", text: "final answer" }] },
+    };
+    const sseBody =
+      `: ping\n\nevent: message\ndata: ${JSON.stringify(notification)}\n\nevent: message\ndata: ${JSON.stringify(result)}\n\n`;
+
+    globalThis.fetch = mock(async () => {
+      return new Response(sseBody, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+    }) as any;
+
+    const client = await loadClient();
+    const answer = await client.readWikiStructure("owner/repo");
+    expect(answer).toBe("final answer");
+
+    globalThis.fetch = originalFetch;
+  });
+
   test("passes AbortSignal to fetch", async () => {
     let capturedSignal: AbortSignal | undefined;
     globalThis.fetch = mock(async (_url: any, init: any) => {
